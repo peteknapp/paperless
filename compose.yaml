@@ -1,0 +1,68 @@
+# Paperless-ngx for household records (bills, statements, tax, medical,
+# warranties). Runs on bps27; see README.md.
+#
+#   webserver  - Paperless itself, docs.eymf.org (port 8010)
+#   db         - Postgres, on bps27's local disk (never on the NAS)
+#   broker     - Valkey (Redis-compatible) task queue, local disk
+#
+# Documents (originals + archived PDFs), the consume folder and exports live
+# on the NAS. Settings that differ per machine, and secrets, are in .env.
+name: paperless
+
+services:
+  broker:
+    image: docker.io/valkey/valkey:9-alpine
+    container_name: paperless-broker
+    restart: unless-stopped
+    volumes:
+      - ./redisdata:/data
+
+  db:
+    image: docker.io/library/postgres:18
+    container_name: paperless-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: paperless
+      POSTGRES_USER: paperless
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      # Postgres 18 images keep their data under /var/lib/postgresql/18/...
+      - ./pgdata:/var/lib/postgresql
+
+  webserver:
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    container_name: paperless
+    restart: unless-stopped
+    depends_on:
+      - db
+      - broker
+    ports:
+      - "8010:8000"
+    environment:
+      PAPERLESS_REDIS: redis://broker:6379
+      PAPERLESS_DBHOST: db
+      PAPERLESS_DBPASS: ${DB_PASSWORD}
+      PAPERLESS_SECRET_KEY: ${SECRET_KEY}
+      PAPERLESS_URL: https://docs.eymf.org
+      PAPERLESS_TIME_ZONE: America/Chicago
+      PAPERLESS_OCR_LANGUAGE: eng
+      # Files run as this user, so it must be able to write the NAS mounts
+      # (same uid/gid the CIFS mount options give bps27's files).
+      USERMAP_UID: ${PUID:-1000}
+      USERMAP_GID: ${PGID:-1000}
+      # The consume folder is on the NAS: inotify can't see changes on CIFS,
+      # so check every 60 s instead. The scanning sorter writes files there
+      # complete (hidden .part first, then renamed).
+      PAPERLESS_CONSUMER_POLLING: "60"
+      PAPERLESS_CONSUMER_RECURSIVE: "true"
+      # Readable originals on the NAS even without Paperless:
+      #   media/documents/originals/2026/Xcel Energy/October bill.pdf
+      PAPERLESS_FILENAME_FORMAT: "{{ created_year }}/{{ correspondent }}/{{ title }}"
+      # Gentle on bps27 (it also runs Immich and the scan matcher).
+      PAPERLESS_TASK_WORKERS: "1"
+      PAPERLESS_THREADS_PER_WORKER: "2"
+    volumes:
+      - ./data:/usr/src/paperless/data        # search index, classifier (local)
+      - ${NAS_ROOT}/media:/usr/src/paperless/media
+      - ${NAS_ROOT}/consume:/usr/src/paperless/consume
+      - ${NAS_ROOT}/export:/usr/src/paperless/export
