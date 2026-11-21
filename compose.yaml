@@ -30,7 +30,7 @@ services:
       - ./pgdata:/var/lib/postgresql
 
   webserver:
-    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    image: ghcr.io/paperless-ngx/paperless-ngx:3.5.1
     container_name: paperless
     restart: unless-stopped
     depends_on:
